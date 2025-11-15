@@ -10,7 +10,6 @@ export function activate(context: vscode.ExtensionContext) {
     { language: "typescript", scheme: "file" },
   ];
 
-  // 1) Ir a la definición en CSS
   const definitionProvider: vscode.DefinitionProvider = {
     provideDefinition(
       document: vscode.TextDocument,
@@ -30,12 +29,10 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      // Devolvemos TODAS las coincidencias -> VS Code muestra lista para elegir
       return findCssLocations(name, kind);
     },
   };
 
-  // 2) Hover con uno o varios bloques CSS
   const hoverProvider: vscode.HoverProvider = {
     provideHover(
       document: vscode.TextDocument,
@@ -76,10 +73,7 @@ interface CssMatch {
   lines: string[];
 }
 
-/**
- * Determina si la palabra está en un atributo class/className o id,
- * y cuál fue el último antes de la palabra.
- */
+
 function getSelectorKind(
   lineText: string,
   charPos: number
@@ -102,9 +96,7 @@ function getSelectorKind(
   return lastKind;
 }
 
-/**
- * Busca TODAS las coincidencias de .name o #name en los .css del workspace
- */
+
 async function findCssMatches(
   name: string,
   kind: SelectorKind
@@ -127,7 +119,7 @@ async function findCssMatches(
       const lineText = lines[lineNumber];
       const match = regex.exec(lineText);
       if (match && match.index !== undefined) {
-        const character = match.index + 1; // justo sobre el nombre de la clase/id
+        const character = match.index + 1; 
         results.push({ uri, line: lineNumber, character, lines });
       }
     }
@@ -136,9 +128,7 @@ async function findCssMatches(
   return results;
 }
 
-/**
- * Para Ctrl+Click / F12 -> varias Locations si hay varias definiciones
- */
+
 async function findCssLocations(
   name: string,
   kind: SelectorKind
@@ -154,9 +144,7 @@ async function findCssLocations(
   });
 }
 
-/**
- * Crea el hover con uno o varios bloques CSS
- */
+
 async function createCssHover(
   name: string,
   kind: SelectorKind
@@ -175,7 +163,7 @@ async function createCssHover(
     }\n\n`
   );
 
-  const maxBlocks = 3; // para no hacer el hover infinito
+  const maxBlocks = 3; 
   const slice = matches.slice(0, maxBlocks);
 
   slice.forEach((m, index) => {
@@ -199,10 +187,7 @@ async function createCssHover(
   return new vscode.Hover(md);
 }
 
-/**
- * Devuelve el bloque CSS desde la línea donde está el selector
- * hasta que se cierran las llaves.
- */
+
 function extractCssBlock(lines: string[], startLine: number): string {
   let openBraces = 0;
   let endLine = startLine;
@@ -225,9 +210,7 @@ function extractCssBlock(lines: string[], startLine: number): string {
   return lines.slice(startLine, endLine + 1).join("\n");
 }
 
-/**
- * Escapa caracteres especiales para usar en RegExp
- */
+
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
