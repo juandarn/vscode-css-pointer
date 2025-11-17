@@ -1,8 +1,8 @@
 {
-  "name": "css-pointer",
-  "displayName": "CSS Pointer",
-  "description": "",
-  "version": "0.0.1",
+  "name": "react-tools",
+  "displayName": "React Tools",
+  "description": "Navega a definiciones de estilos desde JSX/TSX y sincroniza automáticamente las props de componentes React en todo el proyecto.",
+  "version": "0.1.0",
   "publisher": "juandarn",
   "repository": {
     "type": "git",
