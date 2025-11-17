@@ -281,10 +281,4 @@ Cualquier idea o PR es bienvenida. Algunas ideas futuras:
 * Mejor UI para mostrar el diff de cambios antes de aplicar.
 * Soporte para otros frameworks/librerías que usen JSX-like.
 
----
-
-## 🧑‍💻 Autor
-
-Hecha con cariño por **@juandarn** ❤️
-Repo: `https://github.com/juandarn/vscode-css-pointer.git`
 
