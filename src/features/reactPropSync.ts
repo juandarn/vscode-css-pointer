@@ -10,6 +10,9 @@ interface UsageInfo {
   props: string[];
 }
 
+// cache en memoria de props conocidas por componente
+const componentPropsCache = new Map<string, string[]>();
+
 export function registerReactPropSync(context: vscode.ExtensionContext) {
   const autoSyncOnSave = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     if (
@@ -23,18 +26,27 @@ export function registerReactPropSync(context: vscode.ExtensionContext) {
       return;
     }
 
-    // 1) Definición -> usos
+    // 1) Definición -> usos (def es fuente de verdad para add + delete)
     const components = getComponentsInDocument(doc);
     if (components.length) {
       for (const c of components) {
         if (!c.props.length) {
           continue;
         }
-        await syncComponentPropsUsages(c.name, c.props);
+
+        const prevProps = componentPropsCache.get(c.name) || [];
+        const removedProps = prevProps.filter(
+          (p) => !c.props.includes(p)
+        );
+
+        // actualizamos cache con la nueva firma
+        componentPropsCache.set(c.name, c.props);
+
+        await syncComponentPropsUsages(c.name, c.props, removedProps);
       }
     }
 
-    // 2) Usos -> definición
+    // 2) Usos -> definición (uso puede agregar props a la definición)
     const usages = getUsagesInDocument(doc);
     if (!usages.length) {
       return;
@@ -154,7 +166,8 @@ function getUsagesInDocument(document: vscode.TextDocument): UsageInfo[] {
   return usages;
 }
 
-// uso -> definición (y luego al resto de usos)
+// ---------------------- uso -> definición (y luego al resto de usos) ----------------------
+
 async function syncDefinitionFromUsage(usage: UsageInfo): Promise<void> {
   const { componentName, props: usageProps } = usage;
 
@@ -212,6 +225,7 @@ async function syncDefinitionFromUsage(usage: UsageInfo): Promise<void> {
     .map((p) => p.split("=")[0].split(":")[0].replace(/\?$/, "").trim())
     .filter(Boolean);
 
+  // canonical: unión de props existentes + props que vimos en el uso
   const allPropsSet = new Set<string>(defProps);
   for (const p of usageProps) {
     allPropsSet.add(p);
@@ -219,7 +233,8 @@ async function syncDefinitionFromUsage(usage: UsageInfo): Promise<void> {
   const allProps = Array.from(allPropsSet);
 
   const sameLength = allProps.length === defProps.length;
-  const sameContent = sameLength && defProps.every((p, i) => p === allProps[i]);
+  const sameContent =
+    sameLength && defProps.every((p, i) => p === allProps[i]);
 
   if (sameContent) {
     return;
@@ -258,15 +273,145 @@ async function syncDefinitionFromUsage(usage: UsageInfo): Promise<void> {
   edit.replace(targetUri, new vscode.Range(startPos, endPos), newPropsString);
   await vscode.workspace.applyEdit(edit);
 
-  // Propagar al resto de usos
+  // no esperamos removals aquí porque usamos unión (solo añade)
+  componentPropsCache.set(componentName, allProps);
+
+  // Propagar al resto de usos (solo añade props que falten)
   await syncComponentPropsUsages(componentName, allProps);
+}
+
+// ---------------------- helper: parseo de atributos JSX ----------------------
+
+interface ParsedAttr {
+  name: string | null; // null para cosas tipo `{...rest}` o chunks raros
+  text: string;        // texto completo del atributo incluyendo espacios iniciales
+}
+
+function parseJsxAttributes(attrs: string): ParsedAttr[] {
+  const res: ParsedAttr[] = [];
+  const n = attrs.length;
+  let i = 0;
+
+  while (i < n) {
+    let start = i;
+
+    // incluir espacios iniciales en el atributo
+    while (i < n && /\s/.test(attrs[i])) i++;
+    if (i >= n) {
+      break;
+    }
+
+    // si empieza con '{' -> algo tipo `{...rest}`
+    if (attrs[i] === "{") {
+      let depth = 0;
+      const exprStart = i;
+      while (i < n) {
+        const c = attrs[i];
+        if (c === "{") depth++;
+        else if (c === "}") {
+          depth--;
+          if (depth === 0) {
+            i++;
+            break;
+          }
+        }
+        i++;
+      }
+      const text = attrs.slice(start, i);
+      res.push({ name: null, text });
+      continue;
+    }
+
+    const first = attrs[i];
+
+    // si no es letra/underscore -> chunk raro, lo dejamos tal cual
+    if (!/[A-Za-z_$]/.test(first)) {
+      while (i < n && !/\s/.test(attrs[i])) i++;
+      const text = attrs.slice(start, i);
+      res.push({ name: null, text });
+      continue;
+    }
+
+    // nombre del atributo
+    const nameStart = i;
+    while (i < n && /[A-Za-z0-9_$]/.test(attrs[i])) i++;
+    const name = attrs.slice(nameStart, i);
+
+    // espacios después del nombre
+    while (i < n && /\s/.test(attrs[i])) i++;
+
+    // boolean prop sin '='
+    if (i >= n || attrs[i] !== "=") {
+      const text = attrs.slice(start, i);
+      res.push({ name, text });
+      continue;
+    }
+
+    // hay '='
+    i++; // skip '='
+    while (i < n && /\s/.test(attrs[i])) i++;
+    if (i >= n) {
+      const text = attrs.slice(start, i);
+      res.push({ name, text });
+      break;
+    }
+
+    const valueStart = i;
+    let valueEnd = i;
+    const ch = attrs[i];
+
+    if (ch === "{") {
+      let depth = 0;
+      while (i < n) {
+        const c = attrs[i];
+        if (c === "{") depth++;
+        else if (c === "}") {
+          depth--;
+          if (depth === 0) {
+            i++;
+            break;
+          }
+        }
+        i++;
+      }
+      valueEnd = i;
+    } else if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i++;
+      while (i < n) {
+        const c = attrs[i];
+        if (c === quote && attrs[i - 1] !== "\\") {
+          i++;
+          break;
+        }
+        i++;
+      }
+      valueEnd = i;
+    } else {
+      while (
+        i < n &&
+        !/\s/.test(attrs[i]) &&
+        attrs[i] !== ">" &&
+        attrs[i] !== "/"
+      ) {
+        i++;
+      }
+      valueEnd = i;
+    }
+
+    const text = attrs.slice(start, valueEnd);
+    res.push({ name, text });
+  }
+
+  return res;
 }
 
 // ---------------------- SYNC USOS DESDE DEFINICIÓN ----------------------
 
 async function syncComponentPropsUsages(
   componentName: string,
-  props: string[]
+  props: string[],
+  removedProps: string[] = []
 ): Promise<void> {
   const files = await vscode.workspace.findFiles(
     "**/*.{tsx,jsx,ts,js}",
@@ -294,26 +439,46 @@ async function syncComponentPropsUsages(
       const attrs = match[1] || "";
       const selfClosing = match[2] === "/";
 
-      const missingProps = props.filter(
-        (prop) => !new RegExp(`\\b${prop}\\s*=`).test(attrs)
+      const parsed = parseJsxAttributes(attrs);
+      const existingNames = new Set(
+        parsed.filter((a) => a.name).map((a) => a.name as string)
       );
 
-      if (!missingProps.length) {
+      const missingProps = props.filter((p) => !existingNames.has(p));
+      const toRemoveSet = new Set(
+        removedProps.filter((p) => existingNames.has(p))
+      );
+
+      if (missingProps.length === 0 && toRemoveSet.size === 0) {
         continue;
       }
 
-      const insertParts = missingProps.map(
-        (p) => ` ${p}={/* TODO: completar */}`
-      );
-      const insertText = insertParts.join("");
+      const newParts: string[] = [];
 
-      const localIndexOfClose = fullMatch.lastIndexOf(selfClosing ? "/>" : ">");
-      const absoluteInsertOffset =
-        tagRegex.lastIndex - (fullMatch.length - localIndexOfClose);
+      // mantenemos todos los atributos excepto los que queremos eliminar
+      for (const a of parsed) {
+        if (a.name && toRemoveSet.has(a.name)) {
+          continue; // eliminar este prop
+        }
+        newParts.push(a.text);
+      }
 
-      const insertPosition = doc.positionAt(absoluteInsertOffset);
+      // añadimos props que faltan (con TODO)
+      for (const p of missingProps) {
+        newParts.push(` ${p}={/* TODO: completar */}`);
+      }
 
-      edit.insert(uri, insertPosition, insertText);
+      const newAttrs = newParts.join("");
+      const newFull = `<${componentName}${newAttrs}${
+        selfClosing ? "/>" : ">"
+      }`;
+
+      const startOffset = match.index!;
+      const endOffset = startOffset + fullMatch.length;
+      const startPos = doc.positionAt(startOffset);
+      const endPos = doc.positionAt(endOffset);
+
+      edit.replace(uri, new vscode.Range(startPos, endPos), newFull);
       hasChanges = true;
     }
   }
@@ -327,7 +492,7 @@ async function syncComponentPropsUsages(
   const cancelLabel = "Cancelar";
 
   const choice = await vscode.window.showInformationMessage(
-    `Se van a agregar props faltantes de <${componentName} /> en los usos. ¿Quieres aplicar los cambios?`,
+    `Se van a sincronizar las props de <${componentName} /> en sus usos (añadir y eliminar según la definición). ¿Quieres aplicar los cambios?`,
     applyLabel,
     cancelLabel
   );
